@@ -106,11 +106,16 @@ def download_dataset(data_dir):
 
                 print(f"  Found {len(hrefs)} files")
 
+                import time as _time
+                skipped = 0
+                downloaded = 0
+
                 for i, href in enumerate(hrefs):
                     # Extract just the filename from the href
                     fname = href.rsplit("/", 1)[-1]
                     out_path = os.path.join(split_dir, fname)
                     if os.path.exists(out_path):
+                        skipped += 1
                         continue
 
                     # Use the href directly if it's a full URL,
@@ -119,13 +124,36 @@ def download_dataset(data_dir):
                         file_url = href
                     else:
                         file_url = f"{listing_url}{fname}"
-                    print(f"  [{i+1}/{len(hrefs)}] {fname}", end="\r")
-                    urllib.request.urlretrieve(file_url, out_path)
 
-                print(f"  {split}/{dtype}: {len(hrefs)} files done")
+                    # Retry up to 3 times with backoff
+                    for attempt in range(3):
+                        try:
+                            print(f"  [{i+1}/{len(hrefs)}] {fname}",
+                                  end="          \r")
+                            urllib.request.urlretrieve(file_url, out_path)
+                            downloaded += 1
+                            # Small delay to avoid hammering the server
+                            _time.sleep(0.2)
+                            break
+                        except (urllib.error.URLError, OSError) as dl_err:
+                            if os.path.exists(out_path):
+                                os.remove(out_path)  # remove partial file
+                            if attempt < 2:
+                                wait = (attempt + 1) * 5
+                                print(f"\n  Retry {attempt+1}/3 for {fname} "
+                                      f"(waiting {wait}s)...")
+                                _time.sleep(wait)
+                            else:
+                                print(f"\n  Failed after 3 attempts: {fname}: {dl_err}")
+                                print(f"  Run the command again to resume "
+                                      f"({downloaded} downloaded, {skipped} already had)")
+                                return False
+
+                print(f"  {split}/{dtype}: {downloaded} downloaded, "
+                      f"{skipped} already existed")
 
             except (urllib.error.URLError, OSError) as e:
-                print(f"  Error downloading {split}/{dtype}: {e}")
+                print(f"  Error fetching file list for {split}/{dtype}: {e}")
                 return False
 
     print("Download complete!")

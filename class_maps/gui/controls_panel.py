@@ -51,6 +51,43 @@ class ControlsPanel(QWidget):
         compact_layout.addWidget(self.compactness_spin)
         slic_layout.addLayout(compact_layout)
 
+        # Linear feature pre-detection
+        self.linear_check = QCheckBox("Detect linear features (roads/rivers)")
+        self.linear_check.setChecked(True)
+        self.linear_check.setToolTip(
+            "Detect roads, rivers, and paths before superpixel segmentation.\n"
+            "Gives linear features their own dedicated segments instead of\n"
+            "letting them bleed into surrounding terrain."
+        )
+        slic_layout.addWidget(self.linear_check)
+
+        # U-Net model status
+        self._unet_status_label = QLabel("  Model: checking...")
+        self._unet_status_label.setStyleSheet("color: gray; font-size: 11px;")
+        slic_layout.addWidget(self._unet_status_label)
+        self._check_unet_status()
+
+        # Confidence threshold (used by U-Net, replaces old ridge sensitivity)
+        confidence_layout = QHBoxLayout()
+        confidence_layout.addWidget(QLabel("  Confidence:"))
+        self.confidence_spin = QDoubleSpinBox()
+        self.confidence_spin.setRange(0.10, 0.95)
+        self.confidence_spin.setValue(0.50)
+        self.confidence_spin.setSingleStep(0.05)
+        self.confidence_spin.setToolTip(
+            "Road detection confidence threshold.\n"
+            "Lower = more sensitive (detects fainter roads).\n"
+            "Higher = more selective (only confident detections)."
+        )
+        confidence_layout.addWidget(self.confidence_spin)
+        slic_layout.addLayout(confidence_layout)
+
+        # Keep ridge_threshold_spin as hidden for API compat
+        self.ridge_threshold_spin = QDoubleSpinBox()
+        self.ridge_threshold_spin.setRange(0.05, 0.50)
+        self.ridge_threshold_spin.setValue(0.15)
+        self.ridge_threshold_spin.hide()
+
         # Recompute button
         self.recompute_btn = QPushButton("Recompute Superpixels")
         self.recompute_btn.clicked.connect(self.recompute_requested.emit)
@@ -115,6 +152,28 @@ class ControlsPanel(QWidget):
             "n_segments": self.n_segments_spin.value(),
             "compactness": self.compactness_spin.value(),
         }
+
+    def get_linear_params(self):
+        """Return linear feature detection parameters."""
+        return {
+            "enabled": self.linear_check.isChecked(),
+            "confidence": self.confidence_spin.value(),
+            "ridge_threshold": self.ridge_threshold_spin.value(),
+        }
+
+    def _check_unet_status(self):
+        """Check if U-Net model weights are available and update label."""
+        try:
+            from class_maps.core.linear_features import has_unet_model
+            if has_unet_model():
+                self._unet_status_label.setText("  Model: U-Net (trained)")
+                self._unet_status_label.setStyleSheet("color: green; font-size: 11px;")
+            else:
+                self._unet_status_label.setText("  Model: heuristic (no trained U-Net)")
+                self._unet_status_label.setStyleSheet("color: orange; font-size: 11px;")
+        except Exception:
+            self._unet_status_label.setText("  Model: heuristic (fallback)")
+            self._unet_status_label.setStyleSheet("color: orange; font-size: 11px;")
 
     def enable_classification_overlay(self, enabled=True):
         """Enable/disable the classification overlay checkbox."""

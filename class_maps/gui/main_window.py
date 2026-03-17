@@ -14,7 +14,7 @@ from class_maps.core.io_manager import (
     load_image, save_classified_raster, save_density_raster, save_legend_json,
 )
 from class_maps.core.preprocessor import preprocess_image
-from class_maps.core.superpixels import compute_slic
+from class_maps.core.superpixels import compute_slic, compute_slic_with_linear
 from class_maps.core.features import extract_all_features
 from class_maps.core.classifier import LandcoverClassifier
 from class_maps.core.postprocessor import (
@@ -31,24 +31,39 @@ from class_maps.utils.color_utils import get_class_colors
 
 
 class SLICWorker(QThread):
-    """Worker thread for SLIC computation."""
-    finished = pyqtSignal(object)  # labels array
+    """Worker thread for SLIC computation (with optional linear pre-detection)."""
+    finished = pyqtSignal(object, object)  # labels array, linear_segment_ids set
     error = pyqtSignal(str)
 
-    def __init__(self, rgb_array, n_segments, compactness):
+    def __init__(self, rgb_array, gray, n_segments, compactness,
+                 detect_linear=False, linear_params=None):
         super().__init__()
         self.rgb_array = rgb_array
+        self.gray = gray
         self.n_segments = n_segments
         self.compactness = compactness
+        self.detect_linear = detect_linear
+        self.linear_params = linear_params or {}
 
     def run(self):
         try:
-            labels = compute_slic(
-                self.rgb_array,
-                n_segments=self.n_segments,
-                compactness=self.compactness,
-            )
-            self.finished.emit(labels)
+            if self.detect_linear:
+                labels, linear_ids = compute_slic_with_linear(
+                    self.rgb_array,
+                    self.gray,
+                    n_segments=self.n_segments,
+                    compactness=self.compactness,
+                    detect_linear=True,
+                    linear_params=self.linear_params,
+                )
+            else:
+                labels = compute_slic(
+                    self.rgb_array,
+                    n_segments=self.n_segments,
+                    compactness=self.compactness,
+                )
+                linear_ids = set()
+            self.finished.emit(labels, linear_ids)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -90,6 +105,7 @@ class ClassMapsWindow(QMainWindow):
         self._image_data = None      # ImageData namedtuple
         self._preprocessed = None    # dict from preprocess_image
         self._labels = None          # superpixel labels array
+        self._linear_segment_ids = set()  # segment IDs that are linear features
         self._labeled_segments = {}  # {segment_id: class_id}
         self._class_raster = None    # classification result
         self._density_raster = None  # density result
@@ -245,6 +261,7 @@ class ClassMapsWindow(QMainWindow):
 
         # Reset state
         self._labels = None
+        self._linear_segment_ids = set()
         self._labeled_segments = {}
         self._class_raster = None
         self._density_raster = None
@@ -280,36 +297,17 @@ class ClassMapsWindow(QMainWindow):
         self._class_raster = None
         self._feature_matrix = None
         self._segment_ids = None
+        self._linear_segment_ids = set()
         self._controls.enable_classification_overlay(False)
         self._controls.enable_density_overlay(False)
         self._classify_btn.setEnabled(False)
         self._palette.update_labeled_counts({})
 
         params = self._controls.get_slic_params()
+        linear_params = self._controls.get_linear_params()
         rgb = self._image_data.array[:, :, :3]
 
-        self._status_bar.showMessage("Computing superpixels...")
-        self._controls.recompute_btn.setEnabled(False)
-
-        self._worker = SLICWorker(
-            rgb, params["n_segments"], params["compactness"]
-        )
-        self._worker.finished.connect(self._on_slic_finished)
-        self._worker.error.connect(self._on_slic_error)
-        self._worker.start()
-
-    def _on_slic_finished(self, labels):
-        """Handle SLIC computation completion."""
-        self._labels = labels
-        self._canvas.set_superpixel_labels(labels)
-
-        n_segments = len(np.unique(labels))
-        self._controls.recompute_btn.setEnabled(True)
-
-        # Render boundary overlay
-        self._canvas.set_boundary_overlay(labels)
-
-        # Preprocess if not done yet
+        # Need grayscale for linear detection — preprocess if not done
         if self._preprocessed is None:
             self._status_bar.showMessage("Preprocessing image...")
             QApplication.processEvents()
@@ -318,9 +316,51 @@ class ClassMapsWindow(QMainWindow):
                 has_nir=self._image_data.has_nir,
             )
 
-        self._status_bar.showMessage(
-            f"Ready. {n_segments} superpixels. Select a class and click to label."
+        detect_linear = linear_params["enabled"]
+        linear_det_params = {}
+        if detect_linear:
+            linear_det_params["confidence"] = linear_params.get("confidence", 0.5)
+
+        msg = "Computing superpixels"
+        if detect_linear:
+            msg += " (with linear feature detection)..."
+        else:
+            msg += "..."
+        self._status_bar.showMessage(msg)
+        self._controls.recompute_btn.setEnabled(False)
+
+        self._worker = SLICWorker(
+            rgb, self._preprocessed["gray"],
+            params["n_segments"], params["compactness"],
+            detect_linear=detect_linear,
+            linear_params=linear_det_params,
         )
+        self._worker.finished.connect(self._on_slic_finished)
+        self._worker.error.connect(self._on_slic_error)
+        self._worker.start()
+
+    def _on_slic_finished(self, labels, linear_ids):
+        """Handle SLIC computation completion."""
+        self._labels = labels
+        self._linear_segment_ids = linear_ids
+        self._canvas.set_superpixel_labels(labels)
+
+        n_segments = len(np.unique(labels))
+        self._controls.recompute_btn.setEnabled(True)
+
+        # Render boundary overlay
+        self._canvas.set_boundary_overlay(labels)
+
+        n_linear = len(linear_ids)
+        if n_linear > 0:
+            self._status_bar.showMessage(
+                f"Ready. {n_segments} segments ({n_linear} linear features detected). "
+                f"Select a class and click to label."
+            )
+        else:
+            self._status_bar.showMessage(
+                f"Ready. {n_segments} superpixels. Select a class and click to label."
+            )
         self._worker = None
 
     def _on_slic_error(self, error_msg):
@@ -666,7 +706,8 @@ class ClassMapsWindow(QMainWindow):
 
         if self._labels is not None:
             seg_id = int(self._labels[row, col])
-            parts.append(f"Seg: {seg_id}")
+            seg_type = " (linear)" if seg_id in self._linear_segment_ids else ""
+            parts.append(f"Seg: {seg_id}{seg_type}")
             if seg_id in self._labeled_segments:
                 class_id = self._labeled_segments[seg_id]
                 class_defs = self._palette.get_class_definitions()

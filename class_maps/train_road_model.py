@@ -56,11 +56,13 @@ def download_dataset(data_dir):
 
     os.makedirs(data_dir, exist_ok=True)
 
-    # Check if already downloaded
+    # Check if already fully downloaded (1108 training images)
     train_sat = os.path.join(data_dir, "train", "sat")
-    if os.path.isdir(train_sat) and len(os.listdir(train_sat)) > 100:
+    if os.path.isdir(train_sat) and len(os.listdir(train_sat)) >= 1100:
         print(f"Dataset already present at {data_dir} ({len(os.listdir(train_sat))} training images)")
         return True
+    elif os.path.isdir(train_sat) and len(os.listdir(train_sat)) > 0:
+        print(f"Partial dataset found ({len(os.listdir(train_sat))} of 1108 training images). Resuming download...")
 
     print("Downloading Massachusetts Roads Dataset...")
     print(f"Target directory: {data_dir}")

@@ -97,24 +97,32 @@ def download_dataset(data_dir):
                 with urllib.request.urlopen(listing_url, timeout=30) as resp:
                     html = resp.read().decode("utf-8")
 
-                # Parse filenames from directory listing
+                # Parse file URLs from directory listing
+                # Links may be absolute URLs or relative filenames
                 import re
-                filenames = re.findall(r'href="([^"]+\.tiff?)"', html, re.IGNORECASE)
-                if not filenames:
-                    filenames = re.findall(r'href="([^"]+\.png)"', html, re.IGNORECASE)
+                hrefs = re.findall(r'href="([^"]+\.tiff?)"', html, re.IGNORECASE)
+                if not hrefs:
+                    hrefs = re.findall(r'href="([^"]+\.png)"', html, re.IGNORECASE)
 
-                print(f"  Found {len(filenames)} files")
+                print(f"  Found {len(hrefs)} files")
 
-                for i, fname in enumerate(filenames):
+                for i, href in enumerate(hrefs):
+                    # Extract just the filename from the href
+                    fname = href.rsplit("/", 1)[-1]
                     out_path = os.path.join(split_dir, fname)
                     if os.path.exists(out_path):
                         continue
 
-                    file_url = f"{listing_url}{fname}"
-                    print(f"  [{i+1}/{len(filenames)}] {fname}", end="\r")
+                    # Use the href directly if it's a full URL,
+                    # otherwise build from the listing URL
+                    if href.startswith("http"):
+                        file_url = href
+                    else:
+                        file_url = f"{listing_url}{fname}"
+                    print(f"  [{i+1}/{len(hrefs)}] {fname}", end="\r")
                     urllib.request.urlretrieve(file_url, out_path)
 
-                print(f"  {split}/{dtype}: {len(filenames)} files done")
+                print(f"  {split}/{dtype}: {len(hrefs)} files done")
 
             except (urllib.error.URLError, OSError) as e:
                 print(f"  Error downloading {split}/{dtype}: {e}")

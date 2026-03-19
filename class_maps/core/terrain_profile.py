@@ -22,6 +22,8 @@ class TerrainProfile:
     scaler: Any  # sklearn StandardScaler
     slic_params: Dict[str, float]
     metadata: Dict[str, str] = field(default_factory=dict)
+    drawn_polylines: list = field(default_factory=list)  # [[(row, col), ...], ...]
+    line_width: int = 10
 
 
 def save_profile(path, profile):
@@ -35,13 +37,15 @@ def save_profile(path, profile):
         The profile to save.
     """
     metadata = {
-        "version": 1,
+        "version": 2,
         "created": datetime.now().isoformat(),
         "class_definitions": {
             str(k): v for k, v in profile.class_definitions.items()
         },
         "slic_params": profile.slic_params,
         "metadata": profile.metadata,
+        "drawn_polylines": profile.drawn_polylines,
+        "line_width": profile.line_width,
     }
 
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -82,10 +86,18 @@ def load_profile(path):
         v["color"] = tuple(v["color"])
         class_defs[class_id] = v
 
+    # Load drawn polylines (v2+), converting inner lists to tuples
+    raw_polylines = metadata.get("drawn_polylines", [])
+    polylines = [
+        [tuple(pt) for pt in line] for line in raw_polylines
+    ]
+
     return TerrainProfile(
         class_definitions=class_defs,
         model=model,
         scaler=scaler,
         slic_params=metadata.get("slic_params", {}),
         metadata=metadata.get("metadata", {}),
+        drawn_polylines=polylines,
+        line_width=metadata.get("line_width", 10),
     )

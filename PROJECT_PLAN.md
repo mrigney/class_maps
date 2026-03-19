@@ -75,6 +75,14 @@ This downloads the Massachusetts Roads Dataset (~5.8 GB) and trains for 25 epoch
 
 ## Future Work
 
+### Manual Linear Feature Drawing
+- [ ] Add "Draw Linear Features" tool mode to the canvas (click to place points, double-click to finish polyline)
+- [ ] Width spinner in controls panel (default ~10px, adjustable per feature)
+- [ ] Rasterize drawn polylines into boolean mask, feed into `compute_slic_with_linear()` same as U-Net/heuristic output
+- [ ] Combine with U-Net/heuristic masks (OR together) so user can supplement auto-detection
+- [ ] Save/load drawn polylines with terrain profile (`.cmp`) for reuse across similar images
+- [ ] Support for different linear feature types (road, river, path, fence line, airstrip, etc.)
+
 ### Linear Feature Fine-Tuning (Option B)
 - [ ] Create a lightweight fine-tuning script for user-specific terrain
 - [ ] Allow labeling road pixels directly in the GUI for fine-tuning data

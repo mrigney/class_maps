@@ -50,12 +50,16 @@ def compute_slic(rgb_array, n_segments=None, compactness=None, sigma=None):
 
 
 def compute_slic_with_linear(rgb_array, gray, n_segments=None, compactness=None,
-                              sigma=None, detect_linear=True, linear_params=None):
+                              sigma=None, detect_linear=True, linear_params=None,
+                              manual_mask=None):
     """Compute SLIC superpixels with optional linear feature pre-detection.
 
     When detect_linear=True, roads/rivers/paths are detected first and carved
     out as dedicated segments. SLIC then runs only on the remaining pixels.
     This produces much better segmentation of narrow linear features.
+
+    A manual_mask (from user-drawn polylines) can be provided and will be
+    combined with the auto-detected mask.
 
     Parameters
     ----------
@@ -70,62 +74,62 @@ def compute_slic_with_linear(rgb_array, gray, n_segments=None, compactness=None,
     sigma : float, optional
         SLIC smoothing sigma.
     detect_linear : bool
-        Whether to run linear feature pre-detection.
+        Whether to run automatic linear feature pre-detection.
     linear_params : dict, optional
-        Parameters for linear feature detection. Keys:
-        - road_widths: tuple of int
-        - ridge_threshold: float
-        - min_length: int
-        - max_width: int
-        - color_var_threshold: float
+        Parameters for automatic linear feature detection.
+    manual_mask : np.ndarray, optional
+        (H, W) bool mask from user-drawn polylines. Combined with auto-detected
+        mask via logical OR.
 
     Returns
     -------
     np.ndarray
         (H, W) int32 merged label array.
     set of int
-        Set of segment IDs that are linear features (empty if detect_linear=False).
+        Set of segment IDs that are linear features (empty if no linear features).
     """
-    if not detect_linear:
+    has_manual = manual_mask is not None and manual_mask.any()
+
+    if not detect_linear and not has_manual:
         labels = compute_slic(rgb_array, n_segments, compactness, sigma)
         return labels, set()
 
     from class_maps.core.linear_features import (
         detect_linear_features, linear_mask_to_segments, merge_linear_and_slic,
+        combine_masks,
     )
 
-    # Step 1: Detect linear features
-    params = linear_params or {}
-    linear_mask = detect_linear_features(gray, rgb_array, **params)
+    # Step 1: Detect linear features (auto)
+    auto_mask = None
+    if detect_linear:
+        params = linear_params or {}
+        auto_mask = detect_linear_features(gray, rgb_array, **params)
 
-    # Step 2: Convert to labeled segments
+    # Step 2: Combine auto and manual masks
+    linear_mask = combine_masks(auto_mask, manual_mask)
+
+    # Step 3: Convert to labeled segments
     linear_labels, n_linear = linear_mask_to_segments(linear_mask)
 
     if n_linear == 0:
-        # No linear features detected, fall back to standard SLIC
         labels = compute_slic(rgb_array, n_segments, compactness, sigma)
         return labels, set()
 
-    # Step 3: Run SLIC on non-linear pixels
-    # Create a modified image where linear pixels are replaced with neighbor colors
-    # so SLIC doesn't try to incorporate them
+    # Step 4: Run SLIC on non-linear pixels
     slic_image = rgb_array.copy()
 
-    # Replace linear pixels with local median of non-linear neighbors
-    # This prevents SLIC from being attracted to road colors
     linear_bool = linear_mask
     if linear_bool.any():
+        from scipy.ndimage import median_filter
         for ch in range(3):
             channel = slic_image[:, :, ch].astype(np.float32)
-            # Dilate the non-linear region inward to fill linear pixels
-            from scipy.ndimage import median_filter
             filled = median_filter(channel, size=7)
             channel[linear_bool] = filled[linear_bool]
             slic_image[:, :, ch] = channel.astype(np.uint8)
 
     slic_labels = compute_slic(slic_image, n_segments, compactness, sigma)
 
-    # Step 4: Merge linear and SLIC segments
+    # Step 5: Merge linear and SLIC segments
     merged, linear_ids = merge_linear_and_slic(linear_labels, n_linear, slic_labels)
 
     return merged, linear_ids

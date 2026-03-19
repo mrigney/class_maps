@@ -55,7 +55,37 @@ Click **Recompute Superpixels** after changing parameters. Note: this clears all
 
 The goal is for each superpixel to contain a single landcover type. If superpixels are too large, they will span multiple cover types and classification accuracy suffers. If they are too small, feature extraction becomes less meaningful and computation is slower.
 
+### 2b. Draw Linear Features (Optional)
+
+Roads, rivers, and paths are poorly served by SLIC superpixels because their narrow width gets absorbed into surrounding terrain. class_maps provides three ways to handle this:
+
+**Manual drawing (recommended for precision):**
+
+1. In the **Tool Mode** panel, select **Draw linear features**.
+2. **Left-click** on the image to place polyline vertices along a road or path.
+3. **Double-click** or **right-click** to finish the polyline.
+4. Adjust **Line width (px)** to match the feature's pixel width.
+5. Repeat for other linear features. The lines count updates as you draw.
+6. Switch back to **Label superpixels** mode when done drawing.
+7. Click **Recompute Superpixels** — drawn lines become their own segments.
+
+Drawing controls:
+- **Escape**: cancel the current polyline
+- **Ctrl+Z**: undo last point (while drawing) or last completed line
+- **Undo Line**: remove the most recently finished line
+- **Clear All**: remove all drawn lines
+
+**Automatic detection (U-Net):**
+
+If you've trained the road segmentation model (see Installation Guide), enable **Detect linear features** in the Superpixel Parameters section. The U-Net runs automatically when superpixels are computed and detects roads with high accuracy. Adjust the **Confidence** threshold: lower values detect fainter roads, higher values are more selective.
+
+**Combining both:** Manual and automatic methods work together. The U-Net catches obvious roads, and you draw any it missed. Both are combined when superpixels are recomputed.
+
+The status bar shows "(linear)" when hovering over a linear feature segment.
+
 ### 3. Label Training Samples
+
+> **Note:** Make sure you're in **Label superpixels** mode (the default) before labeling. If you're in Draw mode, switch back using the Tool Mode radio buttons.
 
 This is the most important step. The quality of your classification depends directly on the quality and quantity of your training labels.
 
@@ -175,6 +205,7 @@ A profile stores:
 - Class definitions (names, IDs, colors)
 - Trained Random Forest model and feature scaler
 - SLIC parameters
+- Drawn polylines and line width (if any)
 - Metadata (source image name, number of labels)
 
 ### Loading a Profile
@@ -200,8 +231,14 @@ Create profiles for each terrain type you work with:
 | Pan | Middle-mouse drag, or Ctrl+left-click drag |
 | Zoom | Scroll wheel |
 | Fit to window | Ctrl+0 |
+| **Label mode** | |
 | Label superpixel | Left-click |
 | Remove label | Right-click |
+| **Draw mode** | |
+| Place vertex | Left-click |
+| Finish polyline | Double-click or right-click |
+| Cancel polyline | Escape |
+| Undo point/line | Ctrl+Z |
 
 ## Tips for Specific Terrain Types
 
@@ -254,6 +291,13 @@ Create profiles for each terrain type you work with:
 
 - Increase the segment count (more, smaller superpixels).
 - Decrease compactness (segments follow color boundaries more closely).
+
+### Roads/paths bleed into surrounding terrain
+
+- Draw the roads manually using the Draw linear features tool. This is the most reliable method.
+- If you have a trained U-Net model, enable automatic linear feature detection.
+- You can combine both — auto-detect catches most roads, then draw any it missed.
+- Adjust line width to match the road's pixel width in the image.
 
 ### Shadow areas are misclassified
 

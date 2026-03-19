@@ -58,6 +58,14 @@ This installs:
 | PyQt5 | GUI framework |
 | rasterio | GeoTIFF I/O with CRS preservation |
 
+**Optional (for U-Net road detection):**
+
+| Package | Purpose |
+|---------|---------|
+| torch | PyTorch deep learning framework |
+| torchvision | Image transforms and pretrained models |
+| segmentation-models-pytorch | U-Net architecture with pretrained encoders |
+
 ### Troubleshooting: rasterio on Windows
 
 If `pip install rasterio` fails, rasterio requires the GDAL library. Try one of these approaches:
@@ -103,6 +111,43 @@ python run.py
 ```
 
 The class_maps window should appear. See the User's Guide for usage instructions.
+
+## Optional: Train the Road Segmentation Model
+
+class_maps includes an optional U-Net model for automatic road detection. This requires PyTorch and a GPU is strongly recommended.
+
+### Install PyTorch dependencies
+
+```bash
+pip install torch torchvision segmentation-models-pytorch
+```
+
+See [pytorch.org](https://pytorch.org/get-started/locally/) for platform-specific install commands (CUDA version selection, etc.).
+
+### Train the model
+
+```bash
+python -m class_maps.train_road_model
+```
+
+This will:
+1. Download the Massachusetts Roads Dataset (~5.8 GB) from the University of Toronto
+2. Train a U-Net (ResNet34 encoder) for 25 epochs
+3. Save weights to `~/.class_maps/models/road_unet_resnet34.pth`
+
+Training time: ~15 minutes with a modern GPU, ~1+ hours on CPU.
+
+If the download fails or times out, re-run the same command — it resumes from where it left off. Alternatively, download the dataset manually from [Kaggle](https://www.kaggle.com/datasets/balraj98/massachusetts-roads-dataset) and use:
+
+```bash
+python -m class_maps.train_road_model --data-dir /path/to/mass_roads --skip-download
+```
+
+Once trained, the model is automatically used whenever "Detect linear features" is enabled in the GUI. No further configuration is needed.
+
+### Skipping the model
+
+The U-Net is entirely optional. Without it, class_maps falls back to heuristic linear feature detection, or you can draw roads manually using the Draw tool. The core classification workflow (superpixels + Random Forest) works without PyTorch.
 
 ## Updating
 

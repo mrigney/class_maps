@@ -1,8 +1,8 @@
-"""Controls panel: SLIC parameters, overlay toggles, opacity sliders."""
+"""Controls panel: SLIC parameters, overlay toggles, opacity sliders, drawing tools."""
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QDoubleSpinBox,
-    QPushButton, QSlider, QCheckBox, QGroupBox,
+    QPushButton, QSlider, QCheckBox, QGroupBox, QRadioButton, QButtonGroup,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
@@ -10,7 +10,7 @@ from class_maps.config import SLIC_N_SEGMENTS, SLIC_COMPACTNESS
 
 
 class ControlsPanel(QWidget):
-    """Sidebar panel for SLIC parameters and overlay controls."""
+    """Sidebar panel for SLIC parameters, overlay controls, and drawing tools."""
 
     recompute_requested = pyqtSignal()
     boundary_toggled = pyqtSignal(bool)
@@ -18,6 +18,10 @@ class ControlsPanel(QWidget):
     density_toggled = pyqtSignal(bool)
     classification_opacity_changed = pyqtSignal(int)
     density_opacity_changed = pyqtSignal(int)
+    tool_mode_changed = pyqtSignal(str)  # "label" or "draw_line"
+    line_width_changed = pyqtSignal(int)
+    clear_lines_requested = pyqtSignal()
+    undo_line_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -95,6 +99,63 @@ class ControlsPanel(QWidget):
 
         slic_group.setLayout(slic_layout)
         layout.addWidget(slic_group)
+
+        # --- Tool Mode ---
+        tool_group = QGroupBox("Tool Mode")
+        tool_layout = QVBoxLayout()
+
+        self._tool_btn_group = QButtonGroup(self)
+
+        self.label_mode_radio = QRadioButton("Label superpixels")
+        self.label_mode_radio.setChecked(True)
+        self.label_mode_radio.setToolTip("Click superpixels to assign class labels.")
+        self._tool_btn_group.addButton(self.label_mode_radio)
+        tool_layout.addWidget(self.label_mode_radio)
+
+        self.draw_mode_radio = QRadioButton("Draw linear features")
+        self.draw_mode_radio.setToolTip(
+            "Click to place points, double-click or right-click to finish.\n"
+            "Drawn lines are excluded from superpixel computation.\n"
+            "Escape to cancel, Ctrl+Z to undo."
+        )
+        self._tool_btn_group.addButton(self.draw_mode_radio)
+        tool_layout.addWidget(self.draw_mode_radio)
+
+        # Line width spinner
+        width_layout = QHBoxLayout()
+        width_layout.addWidget(QLabel("  Line width (px):"))
+        self.line_width_spin = QSpinBox()
+        self.line_width_spin.setRange(1, 100)
+        self.line_width_spin.setValue(10)
+        self.line_width_spin.setSingleStep(1)
+        self.line_width_spin.setToolTip("Pixel width of drawn linear features.")
+        self.line_width_spin.valueChanged.connect(self.line_width_changed.emit)
+        width_layout.addWidget(self.line_width_spin)
+        tool_layout.addLayout(width_layout)
+
+        # Undo / Clear buttons
+        line_btn_layout = QHBoxLayout()
+        self.undo_line_btn = QPushButton("Undo Line")
+        self.undo_line_btn.setToolTip("Remove the last drawn polyline (Ctrl+Z).")
+        self.undo_line_btn.clicked.connect(self.undo_line_requested.emit)
+        line_btn_layout.addWidget(self.undo_line_btn)
+
+        self.clear_lines_btn = QPushButton("Clear All")
+        self.clear_lines_btn.setToolTip("Remove all drawn lines.")
+        self.clear_lines_btn.clicked.connect(self.clear_lines_requested.emit)
+        line_btn_layout.addWidget(self.clear_lines_btn)
+        tool_layout.addLayout(line_btn_layout)
+
+        # Drawn lines count label
+        self._lines_count_label = QLabel("  Lines: 0")
+        self._lines_count_label.setStyleSheet("color: gray; font-size: 11px;")
+        tool_layout.addWidget(self._lines_count_label)
+
+        # Connect radio buttons
+        self.label_mode_radio.toggled.connect(self._on_tool_mode_toggled)
+
+        tool_group.setLayout(tool_layout)
+        layout.addWidget(tool_group)
 
         # --- Overlay Toggles ---
         overlay_group = QGroupBox("Overlays")
@@ -174,6 +235,17 @@ class ControlsPanel(QWidget):
         except Exception:
             self._unet_status_label.setText("  Model: heuristic (fallback)")
             self._unet_status_label.setStyleSheet("color: orange; font-size: 11px;")
+
+    def _on_tool_mode_toggled(self, checked):
+        """Handle tool mode radio button change."""
+        if self.label_mode_radio.isChecked():
+            self.tool_mode_changed.emit("label")
+        else:
+            self.tool_mode_changed.emit("draw_line")
+
+    def update_lines_count(self, count):
+        """Update the drawn lines count label."""
+        self._lines_count_label.setText(f"  Lines: {count}")
 
     def enable_classification_overlay(self, enabled=True):
         """Enable/disable the classification overlay checkbox."""

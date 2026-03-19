@@ -10,30 +10,38 @@ class_maps is a semi-supervised landcover classification tool designed to produc
 Input Image (PNG / GeoTIFF)
         |
         v
-  +-----------+     +----------------+     +-------------------+
-  | Load &    | --> | SLIC Superpixel| --> | Feature Extraction|
-  | Preprocess|     | Segmentation   |     | (per superpixel)  |
-  +-----------+     +----------------+     +-------------------+
-                                                    |
-                                                    v
-                                           +------------------+
-                          User Labels ---> | Random Forest    |
-                          (GUI clicks)     | Classification   |
-                                           +------------------+
-                                                    |
-                                                    v
-                                           +------------------+
-                                           | Post-processing  |
-                                           | (cleanup, shadow |
-                                           |  resolution,     |
-                                           |  edge refinement)|
-                                           +------------------+
-                                                    |
-                                            +-------+-------+
-                                            |               |
-                                            v               v
-                                     Class Raster    Density Raster
-                                     (uint8 TIFF)    (float32 TIFF)
+  +-----------+     +--------------------+     +----------------+
+  | Load &    | --> | Linear Feature     | --> | SLIC Superpixel|
+  | Preprocess|     | Pre-detection      |     | Segmentation   |
+  +-----------+     | (U-Net + heuristic |     | (non-linear    |
+                    |  + manual drawing) |     |  pixels only)  |
+                    +--------------------+     +----------------+
+                                                       |
+                                                       v
+                                              +-------------------+
+                                              | Feature Extraction|
+                                              | (per superpixel)  |
+                                              +-------------------+
+                                                       |
+                                                       v
+                                              +------------------+
+                             User Labels ---> | Random Forest    |
+                             (GUI clicks)     | Classification   |
+                                              +------------------+
+                                                       |
+                                                       v
+                                              +------------------+
+                                              | Post-processing  |
+                                              | (cleanup, shadow |
+                                              |  resolution,     |
+                                              |  edge refinement)|
+                                              +------------------+
+                                                       |
+                                               +-------+-------+
+                                               |               |
+                                               v               v
+                                        Class Raster    Density Raster
+                                        (uint8 TIFF)    (float32 TIFF)
 ```
 
 ## Module Reference
@@ -107,6 +115,50 @@ Superpixels are the fundamental design decision in class_maps. Instead of classi
 
 - `n_segments` controls granularity. At 0.3-1.0 m/pixel resolution, 2000 segments on a 5000x5000 image produces segments of roughly 50x50 pixels (15-50 meters on a side), appropriate for distinguishing individual tree stands, field boundaries, and road widths.
 - `compactness` trades off color similarity vs. spatial regularity. The default of 10.0 produces reasonably regular shapes while still respecting strong color boundaries like treelines.
+
+### class_maps/core/linear_features.py
+
+Detects and isolates narrow linear features (roads, rivers, paths) before SLIC segmentation. Without this, SLIC absorbs 10-pixel-wide roads into surrounding 50x50 superpixels, mixing road pixels with adjacent terrain.
+
+**Three detection methods (combined via logical OR):**
+
+**1. U-Net semantic segmentation (primary):**
+
+When trained model weights are available at `~/.class_maps/models/road_unet_resnet34.pth`, a U-Net with ResNet34 encoder performs pixel-level road segmentation. The model:
+- Was trained on the Massachusetts Roads Dataset (1108 aerial images at 1m/pixel)
+- Uses tile-based inference with overlap blending to handle arbitrary image sizes
+- Produces a probability map thresholded at a user-adjustable confidence level (default 0.5)
+- Handles all road types, orientations, and widths
+
+The model is defined in `road_model.py` and trained via `train_road_model.py`. Training uses BCE + Dice loss to handle class imbalance (roads are a small fraction of each image).
+
+**2. Heuristic detection (fallback):**
+
+When no trained model is available, a multi-step heuristic approach is used:
+1. **Local uniformity**: finds pixels where local grayscale std < threshold using a sliding window at multiple road-width scales
+2. **Edge-pair detection**: finds pixels between parallel Canny edges at road-width spacing
+3. **Intersection**: candidate pixels must satisfy both criteria
+4. **Brightness filter**: excludes dark pixels (gray < 50) to reject shadow false positives
+5. **Geometry filter**: removes components that are too short, too wide, or not elongated (min aspect ratio 3.5)
+6. **Color uniformity filter**: removes components with high per-channel color variance
+
+**3. Manual drawing (user-driven):**
+
+Users can draw polylines directly on the image in Draw mode. Polylines are rasterized into a boolean mask using `cv2.polylines` with a user-specified pixel width. This is the most precise method and handles features the automated methods miss (unpaved trails, airstrips, fence lines, etc.).
+
+**Integration with SLIC:**
+
+All three masks are OR'd together. The combined mask is converted to labeled connected components. SLIC runs on a modified image where linear pixels are replaced with median-filtered neighbor values (so SLIC isn't attracted to road colors). The linear segments and SLIC segments are merged with offset IDs to avoid collisions.
+
+### class_maps/core/road_model.py
+
+U-Net model creation, weight management, and tile-based inference.
+
+**Model architecture:** U-Net with ResNet34 encoder (pretrained on ImageNet via `segmentation_models_pytorch`). Single-class output (road/non-road). ~24M parameters.
+
+**Inference:** Images are processed in overlapping 512x512 tiles. Overlap regions use linear blending to avoid tile-boundary artifacts. The output is a per-pixel probability map, thresholded to produce a binary mask.
+
+**Weight management:** Trained weights are stored at `~/.class_maps/models/road_unet_resnet34.pth`. The model is loaded once and cached in memory for subsequent detections.
 
 ### class_maps/core/features.py
 
@@ -230,11 +282,11 @@ Serializes and deserializes terrain profiles for reuse across images of similar 
 
 | Entry | Format | Content |
 |-------|--------|---------|
-| `metadata.json` | JSON | Version, creation date, class definitions (names, IDs, colors), SLIC parameters, user metadata |
+| `metadata.json` | JSON | Version, creation date, class definitions (names, IDs, colors), SLIC parameters, drawn polylines, line width, user metadata |
 | `model.pkl` | Python pickle | Trained `RandomForestClassifier` |
 | `scaler.pkl` | Python pickle | Fitted `StandardScaler` |
 
-The JSON metadata is human-readable and can be inspected without loading the Python objects. The pickle files require the same major version of scikit-learn that created them.
+The JSON metadata is human-readable and can be inspected without loading the Python objects. The pickle files require the same major version of scikit-learn that created them. Profile format is version 2 (v1 profiles without polylines are loaded with backward compatibility).
 
 **Use case:** when working with a cluster of similar terrain images (e.g., multiple scenes from the same Nordic region), train on one image, save the profile, and apply it to the others. The classifier generalizes because the feature space (color, texture, shape) is similar across images of the same terrain type. Users can add corrective labels on top of a loaded profile to handle image-specific variations.
 
@@ -252,14 +304,26 @@ The GUI is built with PyQt5 and follows a standard QMainWindow layout:
 |   Image Canvas            |                   |
 |   (QGraphicsView)         | [Classify Button] |
 |                           |                   |
-|   - pan/zoom              | Controls Panel    |
-|   - click-to-label        |   (SLIC params,   |
-|   - overlay compositing   |    overlay toggles,|
+|   - pan/zoom              | Tool Mode         |
+|   - click-to-label        |   (label / draw)  |
+|   - polyline drawing      |                   |
+|   - overlay compositing   | Controls Panel    |
+|                           |   (SLIC params,   |
+|                           |    overlay toggles,|
 |                           |    opacity sliders)|
 +---------------------------+-------------------+
 | Status Bar (pixel coords, segment ID, RGB, class) |
 +-----------------------------------------------+
 ```
+
+**Tool modes:**
+
+The canvas supports two interaction modes, toggled via radio buttons in the Tool Mode panel:
+
+- **Label superpixels** (default): left-click assigns the active class to a superpixel, right-click removes a label.
+- **Draw linear features**: left-click places polyline vertices, double-click or right-click finishes the polyline. Drawn lines appear as orange overlays with yellow vertex dots. A dashed preview line follows the cursor from the last placed vertex. Escape cancels the current polyline, Ctrl+Z undoes the last point or last completed line.
+
+Drawn polylines are rasterized at recompute time into a boolean mask with a user-specified pixel width. The mask is combined with any auto-detected linear features and fed into the SLIC pipeline.
 
 **Threading model:**
 
@@ -276,6 +340,9 @@ The canvas uses `QGraphicsScene` with multiple `QGraphicsPixmapItem` layers at d
 | 15 | Label feedback overlay (user-labeled segments) |
 | 20 | Classification overlay |
 | 25 | Density overlay |
+| 28 | Completed drawn polylines (orange) |
+| 30 | In-progress polyline + cursor preview |
+| 31 | Polyline vertex dots (yellow) |
 
 All overlays are RGBA images with per-pixel alpha, allowing smooth transparency blending.
 

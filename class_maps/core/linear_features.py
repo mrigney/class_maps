@@ -363,6 +363,61 @@ def _filter_by_color_uniformity(mask, rgb, max_channel_std=25.0):
     return result
 
 
+def rasterize_polylines(polylines, image_shape, line_width=10):
+    """Rasterize user-drawn polylines into a binary mask.
+
+    Parameters
+    ----------
+    polylines : list of list of (int, int)
+        Each polyline is a list of (row, col) vertex coordinates.
+    image_shape : tuple of int
+        (H, W) image dimensions.
+    line_width : int
+        Width of the rasterized lines in pixels.
+
+    Returns
+    -------
+    np.ndarray
+        (H, W) bool mask where True = drawn linear feature pixel.
+    """
+    mask = np.zeros(image_shape[:2], dtype=np.uint8)
+    thickness = max(1, line_width)
+
+    for polyline in polylines:
+        if len(polyline) < 2:
+            continue
+        # Convert (row, col) to (x, y) = (col, row) for OpenCV
+        pts = np.array([(c, r) for r, c in polyline], dtype=np.int32)
+        cv2.polylines(mask, [pts], isClosed=False, color=255,
+                      thickness=thickness, lineType=cv2.LINE_AA)
+
+    return mask > 0
+
+
+def combine_masks(*masks):
+    """Combine multiple boolean masks with logical OR.
+
+    Parameters
+    ----------
+    *masks : np.ndarray
+        (H, W) bool masks. None values are skipped.
+
+    Returns
+    -------
+    np.ndarray
+        (H, W) bool combined mask.
+    """
+    result = None
+    for m in masks:
+        if m is None:
+            continue
+        if result is None:
+            result = m.copy()
+        else:
+            result |= m
+    return result if result is not None else np.zeros((1, 1), dtype=bool)
+
+
 def linear_mask_to_segments(mask):
     """Convert a linear feature mask to labeled segments.
 

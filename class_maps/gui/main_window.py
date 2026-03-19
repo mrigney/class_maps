@@ -36,7 +36,7 @@ class SLICWorker(QThread):
     error = pyqtSignal(str)
 
     def __init__(self, rgb_array, gray, n_segments, compactness,
-                 detect_linear=False, linear_params=None):
+                 detect_linear=False, linear_params=None, manual_mask=None):
         super().__init__()
         self.rgb_array = rgb_array
         self.gray = gray
@@ -44,17 +44,20 @@ class SLICWorker(QThread):
         self.compactness = compactness
         self.detect_linear = detect_linear
         self.linear_params = linear_params or {}
+        self.manual_mask = manual_mask
 
     def run(self):
         try:
-            if self.detect_linear:
+            has_manual = self.manual_mask is not None and self.manual_mask.any()
+            if self.detect_linear or has_manual:
                 labels, linear_ids = compute_slic_with_linear(
                     self.rgb_array,
                     self.gray,
                     n_segments=self.n_segments,
                     compactness=self.compactness,
-                    detect_linear=True,
+                    detect_linear=self.detect_linear,
                     linear_params=self.linear_params,
+                    manual_mask=self.manual_mask,
                 )
             else:
                 labels = compute_slic(
@@ -223,10 +226,17 @@ class ClassMapsWindow(QMainWindow):
             self._on_density_opacity_changed
         )
 
+        # Tool mode and drawing
+        self._controls.tool_mode_changed.connect(self._on_tool_mode_changed)
+        self._controls.line_width_changed.connect(self._canvas.set_line_width)
+        self._controls.clear_lines_requested.connect(self._on_clear_lines)
+        self._controls.undo_line_requested.connect(self._on_undo_line)
+
         # Canvas
         self._canvas.cursor_moved.connect(self._on_cursor_moved)
         self._canvas.pixel_clicked.connect(self._on_pixel_clicked)
         self._canvas.pixel_right_clicked.connect(self._on_pixel_right_clicked)
+        self._canvas.polyline_finished.connect(self._on_polyline_finished)
 
         # Palette
         self._palette.classes_changed.connect(self._on_classes_changed)
@@ -321,9 +331,18 @@ class ClassMapsWindow(QMainWindow):
         if detect_linear:
             linear_det_params["confidence"] = linear_params.get("confidence", 0.5)
 
+        # Build manual mask from drawn polylines
+        manual_mask = self._get_manual_linear_mask()
+        has_manual = manual_mask is not None and manual_mask.any()
+
         msg = "Computing superpixels"
+        parts = []
         if detect_linear:
-            msg += " (with linear feature detection)..."
+            parts.append("auto-detection")
+        if has_manual:
+            parts.append(f"{len(self._canvas.get_drawn_polylines())} drawn lines")
+        if parts:
+            msg += " (with " + " + ".join(parts) + ")..."
         else:
             msg += "..."
         self._status_bar.showMessage(msg)
@@ -334,6 +353,7 @@ class ClassMapsWindow(QMainWindow):
             params["n_segments"], params["compactness"],
             detect_linear=detect_linear,
             linear_params=linear_det_params,
+            manual_mask=manual_mask,
         )
         self._worker.finished.connect(self._on_slic_finished)
         self._worker.error.connect(self._on_slic_error)
@@ -446,6 +466,55 @@ class ClassMapsWindow(QMainWindow):
             self._canvas.set_label_feedback(
                 self._labels, self._labeled_segments, class_colors
             )
+
+    # --- Drawing tools ---
+
+    def _on_tool_mode_changed(self, mode):
+        """Handle tool mode change from controls panel."""
+        self._canvas.set_mode(mode)
+        if mode == "draw_line":
+            self._status_bar.showMessage(
+                "Draw mode: click to place points, double-click or right-click to finish. "
+                "Escape to cancel."
+            )
+        else:
+            self._status_bar.showMessage("Label mode: click superpixels to assign classes.")
+
+    def _on_polyline_finished(self, polyline):
+        """Handle a completed polyline from the canvas."""
+        n_lines = len(self._canvas.get_drawn_polylines())
+        self._controls.update_lines_count(n_lines)
+        self._status_bar.showMessage(
+            f"Line drawn ({len(polyline)} points). "
+            f"{n_lines} total lines. Recompute superpixels to apply."
+        )
+
+    def _on_clear_lines(self):
+        """Clear all drawn polylines."""
+        self._canvas.clear_drawn_lines()
+        self._controls.update_lines_count(0)
+        self._status_bar.showMessage("All drawn lines cleared.")
+
+    def _on_undo_line(self):
+        """Undo the last drawn polyline."""
+        self._canvas.undo_last_line()
+        n_lines = len(self._canvas.get_drawn_polylines())
+        self._controls.update_lines_count(n_lines)
+        self._status_bar.showMessage(f"Last line removed. {n_lines} lines remaining.")
+
+    def _get_manual_linear_mask(self):
+        """Build a boolean mask from user-drawn polylines.
+
+        Returns None if no polylines have been drawn.
+        """
+        polylines = self._canvas.get_drawn_polylines()
+        if not polylines:
+            return None
+
+        from class_maps.core.linear_features import rasterize_polylines
+        h, w = self._image_data.array.shape[:2]
+        line_width = self._controls.line_width_spin.value()
+        return rasterize_polylines(polylines, (h, w), line_width)
 
     # --- Classification ---
 
@@ -770,6 +839,8 @@ class ClassMapsWindow(QMainWindow):
                 "source_image": source_name,
                 "n_labeled": str(len(self._labeled_segments)),
             },
+            drawn_polylines=[list(p) for p in self._canvas.get_drawn_polylines()],
+            line_width=self._controls.line_width_spin.value(),
         )
 
         try:
@@ -813,9 +884,18 @@ class ClassMapsWindow(QMainWindow):
         # Load the trained model
         self._classifier.set_model_and_scaler(profile.model, profile.scaler)
 
+        # Load drawn polylines
+        if profile.drawn_polylines:
+            self._canvas.set_drawn_polylines(profile.drawn_polylines)
+            self._controls.line_width_spin.setValue(profile.line_width)
+            self._canvas.set_line_width(profile.line_width)
+            self._controls.update_lines_count(len(profile.drawn_polylines))
+
         source = profile.metadata.get("source_image", "unknown")
+        n_lines = len(profile.drawn_polylines)
+        lines_str = f", {n_lines} drawn lines" if n_lines else ""
         self._status_bar.showMessage(
-            f"Profile loaded (trained on: {source}). "
+            f"Profile loaded (trained on: {source}{lines_str}). "
             f"Open an image and click Classify to apply."
         )
 

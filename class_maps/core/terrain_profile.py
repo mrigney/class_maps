@@ -22,8 +22,8 @@ class TerrainProfile:
     scaler: Any  # sklearn StandardScaler
     slic_params: Dict[str, float]
     metadata: Dict[str, str] = field(default_factory=dict)
-    drawn_polylines: list = field(default_factory=list)  # [[(row, col), ...], ...]
-    line_width: int = 10
+    drawn_polylines: list = field(default_factory=list)  # [(points, width), ...]
+    line_width: int = 10  # default width (used for legacy v2 profiles without per-line widths)
 
 
 def save_profile(path, profile):
@@ -44,7 +44,9 @@ def save_profile(path, profile):
         },
         "slic_params": profile.slic_params,
         "metadata": profile.metadata,
-        "drawn_polylines": profile.drawn_polylines,
+        "drawn_polylines": [
+            {"points": pts, "width": w} for pts, w in profile.drawn_polylines
+        ],
         "line_width": profile.line_width,
     }
 
@@ -86,11 +88,20 @@ def load_profile(path):
         v["color"] = tuple(v["color"])
         class_defs[class_id] = v
 
-    # Load drawn polylines (v2+), converting inner lists to tuples
+    # Load drawn polylines (v2+)
     raw_polylines = metadata.get("drawn_polylines", [])
-    polylines = [
-        [tuple(pt) for pt in line] for line in raw_polylines
-    ]
+    default_width = metadata.get("line_width", 10)
+    polylines = []
+    for entry in raw_polylines:
+        if isinstance(entry, dict) and "points" in entry:
+            # New format: {"points": [...], "width": int}
+            pts = [tuple(pt) for pt in entry["points"]]
+            w = entry.get("width", default_width)
+            polylines.append((pts, w))
+        elif isinstance(entry, list):
+            # Legacy v2 format: plain list of points, use default width
+            pts = [tuple(pt) for pt in entry]
+            polylines.append((pts, default_width))
 
     return TerrainProfile(
         class_definitions=class_defs,

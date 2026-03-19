@@ -506,6 +506,7 @@ class ClassMapsWindow(QMainWindow):
         """Build a boolean mask from user-drawn polylines.
 
         Returns None if no polylines have been drawn.
+        Each polyline carries its own width from when it was drawn.
         """
         polylines = self._canvas.get_drawn_polylines()
         if not polylines:
@@ -513,8 +514,7 @@ class ClassMapsWindow(QMainWindow):
 
         from class_maps.core.linear_features import rasterize_polylines
         h, w = self._image_data.array.shape[:2]
-        line_width = self._controls.line_width_spin.value()
-        return rasterize_polylines(polylines, (h, w), line_width)
+        return rasterize_polylines(polylines, (h, w))
 
     # --- Classification ---
 
@@ -839,7 +839,7 @@ class ClassMapsWindow(QMainWindow):
                 "source_image": source_name,
                 "n_labeled": str(len(self._labeled_segments)),
             },
-            drawn_polylines=[list(p) for p in self._canvas.get_drawn_polylines()],
+            drawn_polylines=[(list(pts), w) for pts, w in self._canvas.get_drawn_polylines()],
             line_width=self._controls.line_width_spin.value(),
         )
 
@@ -884,11 +884,9 @@ class ClassMapsWindow(QMainWindow):
         # Load the trained model
         self._classifier.set_model_and_scaler(profile.model, profile.scaler)
 
-        # Load drawn polylines
+        # Load drawn polylines (each carries its own width)
         if profile.drawn_polylines:
             self._canvas.set_drawn_polylines(profile.drawn_polylines)
-            self._controls.line_width_spin.setValue(profile.line_width)
-            self._canvas.set_line_width(profile.line_width)
             self._controls.update_lines_count(len(profile.drawn_polylines))
 
         source = profile.metadata.get("source_image", "unknown")

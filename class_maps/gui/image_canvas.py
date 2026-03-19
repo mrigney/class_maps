@@ -73,8 +73,8 @@ class ImageCanvas(QGraphicsView):
         # Line drawing state
         self._drawing_points = []  # current polyline being drawn [(row, col), ...]
         self._drawing_items = []   # QGraphicsItems for current in-progress line
-        self._drawn_polylines = [] # completed polylines [[(row, col), ...], ...]
-        self._line_width = 10      # pixel width for drawn lines
+        self._drawn_polylines = [] # completed: [(points, width), ...] where points=[(row,col),...]
+        self._line_width = 10      # current pixel width for new lines
         self._drawn_lines_overlay_items = []  # QGraphicsItems for completed lines
 
         # Overlay visibility
@@ -108,12 +108,20 @@ class ImageCanvas(QGraphicsView):
         return self._mode
 
     def set_line_width(self, width):
-        """Set the pixel width for drawn linear features."""
+        """Set the pixel width for new drawn linear features.
+
+        Does not change the width of already-drawn lines.
+        """
         self._line_width = max(1, width)
-        self._redraw_all_lines()
 
     def get_drawn_polylines(self):
-        """Return all completed polylines as a list of [(row, col), ...] lists."""
+        """Return all completed polylines as (points, width) tuples.
+
+        Returns
+        -------
+        list of (list of (int, int), int)
+            Each entry is (points, width) where points is [(row, col), ...].
+        """
         return list(self._drawn_polylines)
 
     def set_drawn_polylines(self, polylines):
@@ -121,10 +129,10 @@ class ImageCanvas(QGraphicsView):
 
         Parameters
         ----------
-        polylines : list of list of (int, int)
-            Each polyline is a list of (row, col) points.
+        polylines : list of (list of (int, int), int)
+            Each entry is (points, width).
         """
-        self._drawn_polylines = [list(p) for p in polylines]
+        self._drawn_polylines = [(list(pts), w) for pts, w in polylines]
         self._redraw_all_lines()
 
     def clear_drawn_lines(self):
@@ -437,7 +445,7 @@ class ImageCanvas(QGraphicsView):
             self._cancel_drawing()
             return
         polyline = list(self._drawing_points)
-        self._drawn_polylines.append(polyline)
+        self._drawn_polylines.append((polyline, self._line_width))
         self._drawing_points = []
         self._clear_in_progress_items()
         self._redraw_all_lines()
@@ -502,7 +510,7 @@ class ImageCanvas(QGraphicsView):
         self._preview_item.setZValue(30)
 
     def _redraw_all_lines(self):
-        """Redraw all completed polylines on the scene."""
+        """Redraw all completed polylines on the scene, each at its own width."""
         # Remove old completed line items
         for item in self._drawn_lines_overlay_items:
             self._scene.removeItem(item)
@@ -511,10 +519,9 @@ class ImageCanvas(QGraphicsView):
         if not self._drawn_polylines:
             return
 
-        pen = QPen(QColor(255, 50, 0, 180), max(1, self._line_width),
-                   Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-
-        for polyline in self._drawn_polylines:
+        for polyline, width in self._drawn_polylines:
+            pen = QPen(QColor(255, 50, 0, 180), max(1, width),
+                       Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
             for i in range(len(polyline) - 1):
                 r1, c1 = polyline[i]
                 r2, c2 = polyline[i + 1]

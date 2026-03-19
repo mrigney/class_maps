@@ -368,12 +368,14 @@ def rasterize_polylines(polylines, image_shape, line_width=10):
 
     Parameters
     ----------
-    polylines : list of list of (int, int)
-        Each polyline is a list of (row, col) vertex coordinates.
+    polylines : list
+        Either a list of (points, width) tuples where points is [(row, col), ...]
+        and width is an int, or a list of [(row, col), ...] lists (legacy format,
+        uses line_width for all).
     image_shape : tuple of int
         (H, W) image dimensions.
     line_width : int
-        Width of the rasterized lines in pixels.
+        Default width for lines without per-line width (legacy format).
 
     Returns
     -------
@@ -381,13 +383,19 @@ def rasterize_polylines(polylines, image_shape, line_width=10):
         (H, W) bool mask where True = drawn linear feature pixel.
     """
     mask = np.zeros(image_shape[:2], dtype=np.uint8)
-    thickness = max(1, line_width)
 
-    for polyline in polylines:
-        if len(polyline) < 2:
+    for entry in polylines:
+        # Support both (points, width) tuples and plain point lists
+        if isinstance(entry, tuple) and len(entry) == 2 and isinstance(entry[1], (int, float)):
+            points, width = entry
+        else:
+            points, width = entry, line_width
+
+        if len(points) < 2:
             continue
+        thickness = max(1, int(width))
         # Convert (row, col) to (x, y) = (col, row) for OpenCV
-        pts = np.array([(c, r) for r, c in polyline], dtype=np.int32)
+        pts = np.array([(c, r) for r, c in points], dtype=np.int32)
         cv2.polylines(mask, [pts], isClosed=False, color=255,
                       thickness=thickness, lineType=cv2.LINE_AA)
 
